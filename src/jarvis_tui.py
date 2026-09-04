@@ -160,6 +160,18 @@ REACTOR = [
     "[#7DF9FF]  ╭────────╮  [/]\n[#7DF9FF] ╭┤[#FFFFFF] ◟  ◞ ├╮ [/]\n[#7DF9FF] ││[#FFFFFF]  ◉  [/]││ [/]\n[#7DF9FF] ╰┤[#FFFFFF] ◜  ◝ ├╯ [/]\n[#7DF9FF]  ╰────────╯  [/]",
 ]
 SPIN = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+PENSANDO_FRASES = [
+    "consultando o oráculo",
+    "vasculhando os sistemas",
+    "decifrando intenções",
+    "sincronizando o núcleo",
+    "ponderando, senhor",
+]
+SAUDACAO_VIVA = [
+    "Sistemas em verde, senhor. Diga e obedecerei — com estilo.",
+    "Núcleo aquecido. O chat hoje tem pulso.",
+    "Pronto para servir — e hoje até converso com brilho.",
+]
 BOOT_LINES = [
     "> núcleo arc ............ [OK]",
     "> uplink opencode ........ [OK]",
@@ -176,6 +188,8 @@ Screen { background: #02070F; color: #D6F6FF; }
 #hud .dim { color: #5A7FA6; }
 #chatwrap { background: #081324; border: round #1E4A7A; width: 70%; height: 1fr; padding: 0 1; }
 #chatwrap > .title { background: #0E223D; color: #7DF9FF; padding: 0 1; text-style: bold; }
+#chattitle.viva { color: #FFFFFF; background: #14315A; }
+#chattitle.pensando { color: #00D4FF; background: #0A2A4A; text-style: bold; }
 #chatwrap:focus-within { border: round #00D4FF; }
 #chat { background: #081324; height: 1fr; scrollbar-color: #00D4FF; scrollbar-background: #0A1E33; }
 #side { background: #071120; width: 30%; height: 1fr; padding: 0 1 0 0; }
@@ -406,12 +420,15 @@ class JarvisApp(App):
         self._spin = 0
         self._sent_init = False
         self._msgs: list[tuple[str, str, str]] = []  # (hora, autor, texto) p/ busca
+        self._pensando_timer = None
+        self._pensando_t0 = 0.0
+        self._pensando_idx = 0
 
     def compose(self) -> ComposeResult:
         yield Static(f"  ◈ J.A.R.V.I.S.  │  [dim]uplink: opencode/agent jarvis[/]  │  [dim]{MIC_KEY} 🎙 · {SPK_KEY} 🔊 · {OUV_KEY} 👂[/]", id="hud")
         with Horizontal():
             with Vertical(id="chatwrap"):
-                yield Static("◈ UPLINK // CHAT", classes="title")
+                yield Static("◈ UPLINK // CHAT ● PRONTO", classes="title", id="chattitle")
                 yield RichLog(id="chat", wrap=True, markup=True, auto_scroll=True)
             with Vertical(id="side"):
                 yield Static("", id="core", classes="panel")
@@ -439,8 +456,14 @@ class JarvisApp(App):
                 self._render_jarvis(chat, ts, txt)
         if self._msgs:
             chat.write("[dim]─ histórico restaurado ─[/]")
+        import random
         chat.write("[#1E4A7A]────────────────────────────────────────────[/]")
         chat.write(f"[bold #00D4FF]◈ Jarvis online.[/] Sessão [dim]{sid}[/] — MCPs ao lado, senhor.")
+        chat.write(f"[dim]◈ {random.choice(SAUDACAO_VIVA)}[/]")
+        try:
+            self.query_one("#chattitle", Static).add_class("viva")
+        except Exception:
+            pass
         if not self.voz:
             try:
                 self.query_one("#spk", Button).label = "🔇"
@@ -528,15 +551,76 @@ class JarvisApp(App):
 
     @staticmethod
     def _render_user(chat: RichLog, ts: str, text: str) -> None:
-        chat.write(f"\n[dim]{ts}[/] [bold #FFB300]◈ SENHOR[/]\n  {escape(text)}")
+        chat.write(f"\n[#FFB300]━━━ ◈ SENHOR ━━━[/] [dim]{ts}[/]")
+        chat.write(f"  {escape(text)}")
 
     @staticmethod
     def _render_jarvis(chat: RichLog, ts: str, reply: str) -> None:
-        chat.write(f"\n[dim]{ts}[/] [bold #00D4FF]◈ JARVIS[/]")
+        chat.write(f"\n[#00D4FF]━━━ ◈ JARVIS ━━━[/] [dim]{ts} ● respondendo[/]")
         if reply:
             chat.write(Markdown(reply))
         else:
-            chat.write("[dim](sem resposta)[/]")
+            chat.write("[dim](sem resposta — até eu fiquei sem palavras, senhor)[/]")
+
+    def _pensando_start(self) -> None:
+        import random
+        self._pensando_t0 = time.time()
+        self._pensando_idx = 0
+        try:
+            self.query_one("#chattitle", Static).update("◈ UPLINK // PENSANDO ⠋")
+            self.query_one("#chattitle", Static).add_class("pensando")
+            self.query_one("#chattitle", Static).remove_class("viva")
+        except Exception:
+            pass
+        try:
+            self.query_one("#prompt", Input).placeholder = "Jarvis está pensando… aguarde, senhor"
+        except Exception:
+            pass
+        if self._pensando_timer is None:
+            try:
+                self._pensando_timer = self.set_interval(0.35, self._pensando_tick)
+            except Exception:
+                pass
+
+    def _pensando_tick(self) -> None:
+        if not self.busy:
+            return
+        self._pensando_idx += 1
+        spin = SPIN[self._pensando_idx % len(SPIN)]
+        frase = PENSANDO_FRASES[(self._pensando_idx // 6) % len(PENSANDO_FRASES)]
+        secs = int(time.time() - self._pensando_t0)
+        try:
+            self.query_one("#chattitle", Static).update(f"◈ UPLINK // PENSANDO {spin} {secs}s")
+        except Exception:
+            pass
+        try:
+            self.query_one("#promptbar", Static).update(
+                f"{spin} Jarvis {frase}… {secs}s · uplink ativo, senhor")
+        except Exception:
+            pass
+
+    def _pensando_stop(self, secs: int = 0) -> None:
+        try:
+            if self._pensando_timer is not None:
+                self._pensando_timer.stop()
+        except Exception:
+            pass
+        self._pensando_timer = None
+        try:
+            t = self.query_one("#chattitle", Static)
+            t.update("◈ UPLINK // CHAT ● PRONTO")
+            t.remove_class("pensando")
+            t.add_class("viva")
+        except Exception:
+            pass
+        try:
+            self.query_one("#prompt", Input).placeholder = "Diga ao Jarvis…"
+            base = f"SENHOR ❯ digite, /ajuda, dite 🎙 ou diga hey jarvis 👂 · pare com 'pode parar'"
+            if secs:
+                base += f" · [dim]última resposta em {secs}s[/]"
+            self.query_one("#promptbar", Static).update(base)
+        except Exception:
+            pass
 
     def handle_slash(self, text: str) -> None:
         """Comandos locais /ajuda /voz /ouvido /limpar /nova /briefing /mcp /buscar /sair."""
@@ -1007,24 +1091,49 @@ class JarvisApp(App):
         if self.busy:
             return
         self.busy = True
+        t0 = time.time()
         chat = self.query_one("#chat", RichLog)
         ts = datetime.now().strftime("%H:%M")
         self._render_user(chat, ts, text)
         self._msgs.append((ts, "senhor", text))
         hist_append("senhor", text)
-        chat.write(f"[dim]{SPIN[0]} Jarvis consulta o oráculo…[/]")
+        self._pensando_start()
+        self.refresh_panels()
         try:
             reply, tools = await asyncio.to_thread(self._run_opencode, text)
+            secs = int(time.time() - t0)
             ts2 = datetime.now().strftime("%H:%M")
-            self._render_jarvis(chat, ts2, reply)
-            self._msgs.append((ts2, "jarvis", reply or ""))
-            hist_append("jarvis", reply or "")
+            self._pensando_stop(secs)
+            # Revelação em blocos: dá pulso de digitação sem travar o chat.
+            if reply and len(reply) > 600:
+                partes = re.split(r"(?<=\n\n)|\n", reply)
+                acumulado = ""
+                chat.write(f"\n[#00D4FF]━━━ ◈ JARVIS ━━━[/] [dim]{ts2} ● respondido em {secs}s[/]")
+                for p in partes:
+                    if not p.strip():
+                        continue
+                    acumulado += p + "\n"
+                    if len(acumulado) > 600:
+                        chat.write(Markdown(acumulado))
+                        acumulado = ""
+                        await asyncio.sleep(0.18)
+                if acumulado.strip():
+                    chat.write(Markdown(acumulado))
+                self._msgs.append((ts2, "jarvis", reply))
+                hist_append("jarvis", reply)
+            else:
+                self._render_jarvis(chat, ts2, reply)
+                self._msgs.append((ts2, "jarvis", reply or ""))
+                hist_append("jarvis", reply or "")
+                if secs >= 2:
+                    chat.write(f"[dim]─ respondido em {secs}s ─[/]")
             for t in tools[:6]:
-                chat.write(f"    [dim]⚙ {t}[/]")
+                chat.write(f"    [dim]⚙ {t} ✓[/]")
             chat.write("[#1E4A7A]────────────────────────────────────────────[/]")
             if self.voz and reply:
                 self.speak(reply)
         except Exception as e:
+            self._pensando_stop()
             chat.write(f"\n[bold red]◈ Falha:[/] {str(e)[:300]}")
         finally:
             self.busy = False
