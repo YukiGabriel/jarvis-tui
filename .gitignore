@@ -1,6 +1,7 @@
 __pycache__/
 *.py[cod]
 .venv/
+uv.lock
 *.wav
 *.mp3
 session_id

@@ -34,8 +34,13 @@ jarvis_abrir_chat() {
   fi
 }
 
-jarvis_pode_alertar() {
-  # $1 = nome, $2 = cooldown em minutos — verdade se pode avisar agora.
+jarvis_notify_voz() {
+  # $1 = título, $2 = texto — notify + voz juntos (lembretes, foco).
+  jarvis_falar_fundo "$2"
+  notify-send -u normal -t 15000 "$1" "$2" 2>/dev/null || true
+}
+
+jarvis_pode_alertar() {  # $1 = nome, $2 = cooldown em minutos — verdade se pode avisar agora.
   f="$JARVIS_SHARE/sentinela/$1"
   [ -f "$f" ] || return 0
   agora=$(date +%s); antes=$(cat "$f" 2>/dev/null || echo 0)

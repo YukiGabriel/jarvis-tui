@@ -1,0 +1,56 @@
+#!/bin/sh
+# Jarvis-foco — pomodoro com voz: foco, pausa e fim, senhor.
+# Uso: jarvis-foco [25 [5 [4]]]   (trabalho min, pausa min, ciclos)
+#      jarvis-foco estado | para
+set -u
+COMUM="$(dirname "$0")/.jarvis-comum"
+[ -r "$COMUM" ] || COMUM="${JARVIS_BIN:-$HOME/.local/bin}/.jarvis-comum"
+# shellcheck source=./.jarvis-comum
+. "$COMUM"
+PIDF="$JARVIS_SHARE/foco/pid"
+mkdir -p "$(dirname "$PIDF")"
+EU="$(readlink -f "$0")"
+
+num() { # $1 = valor — ecoa se for número positivo
+  case "$1" in ''|*[!0-9.]*) return 1;; esac
+  awk "BEGIN{exit !( $1 > 0 )}" 2>/dev/null && printf '%s' "$1"
+}
+para_segs() { awk "BEGIN{printf \"%d\", $1 * 60}"; }
+
+vivo() { [ -f "$PIDF" ] && kill -0 "$(cat "$PIDF" 2>/dev/null)" 2>/dev/null; }
+
+case "${1:-}" in
+  --roda) # interno: o laço, já descolado
+    trab="$2"; pausa="$3"; ciclos="$4"
+    i=1
+    while [ "$i" -le "$ciclos" ]; do
+      jarvis_notify_voz "Jarvis — foco" "Sessão $i de $ciclos, senhor. Hora de focar por ${trab} minutos."
+      sleep "$(para_segs "$trab")"
+      if [ "$i" -eq "$ciclos" ]; then break; fi
+      jarvis_notify_voz "Jarvis — foco" "Pausa de ${pausa} minutos, senhor. Respire."
+      sleep "$(para_segs "$pausa")"
+      i=$((i + 1))
+    done
+    jarvis_notify_voz "Jarvis — foco" "Sessão completa, senhor. Belo trabalho."
+    rm -f "$PIDF"
+    ;;
+  para|parar|stop)
+    vivo && kill "$(cat "$PIDF")" 2>/dev/null
+    rm -f "$PIDF"
+    echo "foco encerrado, senhor."
+    ;;
+  estado|status)
+    if vivo; then echo "foco em andamento (pid $(cat "$PIDF"))."
+    else echo "foco parado."; fi
+    ;;
+  ""|--help|-h|ajuda) echo "Uso: jarvis-foco [25 [5 [4]]] | estado | para" >&2; exit 1;;
+  *)
+    if vivo; then echo "já há um foco em andamento — 'jarvis-foco para' primeiro." >&2; exit 1; fi
+    trab="$(num "${1:-25}")"; pausa="$(num "${2:-5}")"; ciclos="$(num "${3:-4}")"
+    [ -n "$trab" ] && [ -n "$pausa" ] && [ -n "$ciclos" ] || { echo "números positivos, senhor." >&2; exit 1; }
+    ciclos="${ciclos%.*}"
+    nohup "$EU" --roda "$trab" "$pausa" "$ciclos" >/dev/null 2>&1 < /dev/null &
+    echo "$!" > "$PIDF"
+    echo "foco iniciado, senhor: ${ciclos}x ${trab}min + ${pausa}min."
+    ;;
+esac

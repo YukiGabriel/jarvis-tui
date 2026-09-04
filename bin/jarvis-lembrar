@@ -1,0 +1,78 @@
+#!/bin/sh
+# Jarvis-lembrar — "me avise em 20 min", com voz, senhor.
+# Uso: jarvis-lembrar em 20min "regar as plantas"
+#      jarvis-lembrar as 18:45 "ligar para a mãe"
+#      jarvis-lembrar lista | cancela ID
+# Agenda via timer transiente do systemd; sem daemon próprio.
+set -u
+COMUM="$(dirname "$0")/.jarvis-comum"
+[ -r "$COMUM" ] || COMUM="${JARVIS_BIN:-$HOME/.local/bin}/.jarvis-comum"
+# shellcheck source=./.jarvis-comum
+. "$COMUM"
+REG="$JARVIS_SHARE/lembretes"
+mkdir -p "$REG"
+EU="$(readlink -f "$0")"
+
+uso() { echo "Uso: jarvis-lembrar em 20min|2h|30s \"texto\" | as HH:MM \"texto\" | lista | cancela ID" >&2; exit 1; }
+
+para_segundos() { # $1 = 20min|2h|30s → segundos (ou vazio se inválido)
+  case "$1" in
+    *s) n="${1%s}"; [ "$n" -eq "$n" ] 2>/dev/null && echo "$n";;
+    *min) n="${1%min}"; [ "$n" -eq "$n" ] 2>/dev/null && echo $((n * 60));;
+    *h) n="${1%h}"; [ "$n" -eq "$n" ] 2>/dev/null && echo $((n * 3600));;
+  esac
+}
+
+agendar() { # $1 = id, $2 = época, $3 = texto, resto = opção de tempo do systemd-run
+  id="$1"; epoca="$2"; texto="$3"; shift 3
+  printf '%s\n%s\n' "$epoca" "$texto" > "$REG/$id"
+  systemd-run --user --quiet --unit="jarvis-lembrete-$id" \
+    --description="Jarvis: $texto" "$@" "$EU" --tocar "$id" \
+    || { rm -f "$REG/$id"; echo "falha ao agendar (systemd)" >&2; exit 1; }
+  echo "anotado, senhor ($id)."
+}
+
+cmd="${1:-}"; shift 2>/dev/null || true
+case "$cmd" in
+  --tocar) # interno: disparado pelo timer
+    id="${1:-}"; f="$REG/$id"
+    [ -f "$f" ] || exit 0
+    msg="$(tail -n +2 "$f")"
+    rm -f "$f"
+    jarvis_notify_voz "Jarvis — lembrete" "$msg"
+    echo "lembrete: $msg"
+    ;;
+  em)
+    [ $# -ge 2 ] || uso
+    secs="$(para_segundos "$1")"; [ -n "$secs" ] || uso
+    shift; msg="$*"
+    agendar "$(date +%s)$$" "$(( $(date +%s) + secs ))" "$msg" --on-active="${secs}s"
+    ;;
+  as)
+    [ $# -ge 2 ] || uso
+    case "$1" in [0-2][0-9]:[0-5][0-9]) ;; *) uso;; esac
+    hm="$1"; shift; msg="$*"
+    alvo="$(date -d "today $hm" +%s)" || uso
+    [ "$alvo" -le "$(date +%s)" ] && alvo="$(date -d "tomorrow $hm" +%s)"
+    agendar "$(date +%s)$$" "$alvo" "$msg" --on-calendar="$(date -d "@$alvo" "+%Y-%m-%d %H:%M:%S")"
+    ;;
+  lista)
+    agora="$(date +%s)"; n=0
+    for f in "$REG"/*; do
+      [ -f "$f" ] || continue
+      epoca="$(head -n 1 "$f")"; msg="$(tail -n +2 "$f")"
+      case "$epoca" in ''|*[!0-9]*) continue;; esac
+      falta=$(( (epoca - agora + 59) / 60 ))
+      [ "$falta" -lt 0 ] && falta=0
+      echo "$(basename "$f")  em ${falta}min  $msg"; n=$((n + 1))
+    done
+    [ "$n" -eq 0 ] && echo "nada pendente, senhor."
+    ;;
+  cancela)
+    id="${1:-}"; [ -n "$id" ] || uso
+    systemctl --user stop "jarvis-lembrete-$id.timer" >/dev/null 2>&1
+    rm -f "$REG/$id"
+    echo "cancelado, senhor."
+    ;;
+  *) uso;;
+esac

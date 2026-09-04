@@ -29,8 +29,9 @@
 | `ctrl+s` | liga/desliga a voz das respostas |
 | `ctrl+w` | liga/desliga o ouvido (`hey jarvis` só dentro da TUI) |
 | `ctrl+l` / `ctrl+q` | limpa o chat / sai |
+| `/volume 70` · `/brilho +10` · `/foto [area]` | som, tela e captura sem sair do chat |
 
-Painel lateral mostra **núcleo**, **sistemas (MCPs)** com status real (`●` ok, `✗` falho) e **sessão**. Dizer *"pode parar"* durante a gravação encerra e envia.
+Painel lateral mostra **núcleo**, **sistemas (MCPs)** com status real (`●` ok, `✗` falho) e **sessão**. Dizer *"pode parar"* durante a gravação encerra e envia. O briefing da manhã traz a **agenda do dia** (requer o MCP `google-calendar` — ver `examples/opencode-mcp.json`).
 
 ### 📦 Instalação
 
@@ -68,7 +69,7 @@ uv tool run --from piper-tts piper ...      # vozes razo/faber (sob demanda)
 | `JARVIS_MCP_LIVE` | `1` | `0` desliga o status ao vivo dos MCPs (economiza CPU) |
 | `JARVIS_MIC_MAX` | `120` | teto da gravação (s) |
 | `JARVIS_APPS` | `0` | `1` abre apps junto no briefing (uso pessoal) |
-| `JARVIS_NOTIF_VOZ` | `1` | `0` emudece a voz de briefing, nag e sentinela |
+| `JARVIS_NOTIF_VOZ` | `1` | `0` emudece a voz de briefing, nag, sentinela, lembretes e foco |
 | `JARVIS_CPU` / `JARVIS_MEM` / `JARVIS_DISK` | `85` / `90` / `90` | limiares (%) do sentinela |
 | `JARVIS_TEMP` / `JARVIS_BAT` | `80` / `20` | febre (°C) e bateria fraca (%) do sentinela |
 | `JARVIS_COOLDOWN` | `30` | minutos entre um aviso e outro do mesmo tipo |
@@ -82,7 +83,7 @@ Modo leve (CPU fraca): `JARVIS_MCP_LIVE=0 JARVIS_WAKE=0 jarvis-tui`
 src/jarvis_tui.py      a TUI (Textual)
 bin/                   auxiliares: falar, transcrever, escuta, vozd,
                        kokoro, briefing, nag, ouvir, wake-calibra,
-                       sentinela + .jarvis-comum (biblioteca partilhada)
+                       sentinela, lembrar, foco + .jarvis-comum (biblioteca)
 agent/jarvis.md        prompt do agente (vai para ~/.config/opencode/agent/)
 examples/              trecho de opencode.json com os MCPs + systemd do sentinela
 ```
@@ -98,6 +99,18 @@ jarvis-sentinela --quieto   # só notify, sem voz
 cp examples/systemd/jarvis-sentinela.* ~/.config/systemd/user/
 systemctl --user daemon-reload && systemctl --user enable --now jarvis-sentinela.timer
 ```
+
+### ⏰ Lembretes e foco
+
+```bash
+jarvis-lembrar em 20min "regar as plantas"
+jarvis-lembrar as 18:45 "ligar para a mãe"
+jarvis-lembrar lista | cancela ID
+jarvis-foco 25 5 4    # pomodoro com voz (trabalho, pausa, ciclos)
+jarvis-foco estado | para
+```
+
+No chat basta dizer *"me avise em 20 min"* ou *"inicie um foco"* — o agente agenda sozinho.
 
 ### 📜 Licença
 

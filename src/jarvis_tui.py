@@ -623,7 +623,7 @@ class JarvisApp(App):
             pass
 
     def handle_slash(self, text: str) -> None:
-        """Comandos locais /ajuda /voz /ouvido /limpar /nova /briefing /mcp /buscar /sair."""
+        """Comandos locais /ajuda /voz /ouvido /limpar /nova /briefing /mcp /buscar /volume /brilho /foto /sair."""
         chat = self.query_one("#chat", RichLog)
         parts = text[1:].split(None, 1)
         cmd, arg = parts[0].lower(), (parts[1] if len(parts) > 1 else "")
@@ -632,8 +632,10 @@ class JarvisApp(App):
                        "  [bold]/briefing[/] resumo do dia\n"
                        "  [bold]/voz[/] liga/desliga a fala · [bold]/ouvido[/] liga/desliga o hey jarvis\n"
                        "  [bold]/nova[/] nova conversa · [bold]/limpar[/] limpa a tela\n"
-                       "  [bold]/buscar TERMO[/] procura no chat · [bold]/mcp[/] estado dos sistemas\n"
-                       "  [bold]/sair[/] fecha a TUI")
+                        "  [bold]/buscar TERMO[/] procura no chat · [bold]/mcp[/] estado dos sistemas\n"
+                        "  [bold]/volume [N|+N|-N|mudo][/] som · [bold]/brilho [N|+N|-N][/] tela\n"
+                        "  [bold]/foto [area][/] captura a tela\n"
+                        "  [bold]/sair[/] fecha a TUI")
         elif cmd == "voz":
             self.action_toggle_voz()
         elif cmd == "ouvido":
@@ -658,10 +660,96 @@ class JarvisApp(App):
                 self._do_search(arg)
             else:
                 self.action_search_chat()
+        elif cmd in ("volume", "vol", "som"):
+            chat.write(self._sys_volume(arg))
+        elif cmd in ("brilho", "luz", "brightness"):
+            chat.write(self._sys_brilho(arg))
+        elif cmd in ("foto", "print", "screenshot"):
+            chat.write(self._sys_foto(arg))
         elif cmd in ("sair", "quit", "exit"):
             self.exit()
         else:
             chat.write(f"[dim]◈ Comando desconhecido: {escape(cmd)}. Tente /ajuda, senhor.[/]")
+
+    @staticmethod
+    def _sys(args: list[str]) -> tuple[bool, str]:
+        """Roda um comando de sistema; (ok, saída). Na falha, a saída é o stderr."""
+        try:
+            p = subprocess.run(args, capture_output=True, text=True, timeout=15)
+        except subprocess.TimeoutExpired:
+            return False, "tempo esgotado"
+        except (FileNotFoundError, subprocess.SubprocessError):
+            return False, ""
+        out = p.stdout if p.returncode == 0 else p.stderr
+        return p.returncode == 0, (out or "").strip()
+
+    def _sys_volume(self, arg: str) -> str:
+        """Som via pactl: mostra, define N%, ajusta +N/-N ou alterna o mudo."""
+        a = arg.strip().lower()
+        if a in ("mudo", "mute", "m"):
+            ok, _ = self._sys(["pactl", "set-sink-mute", "@DEFAULT_SINK@", "toggle"])
+            if not ok:
+                return "[dim]◈ pactl ausente, senhor. pacman -S libpulse resolve.[/]"
+            return self._sys_volume("")
+        if a:
+            m = re.fullmatch(r"([+-]?\d{1,3})", a)
+            if not m:
+                return "[dim]◈ Use /volume 70, /volume +10, /volume -10 ou /volume mudo, senhor.[/]"
+            v = f"{m.group(1)}%"
+            ok, _ = self._sys(["pactl", "set-sink-volume", "@DEFAULT_SINK@", v])
+            if not ok:
+                return "[dim]◈ pactl ausente, senhor. pacman -S libpulse resolve.[/]"
+            ok, _ = self._sys(["pactl", "set-sink-mute", "@DEFAULT_SINK@", "0"])
+        ok, out = self._sys(["pactl", "get-sink-volume", "@DEFAULT_SINK@"])
+        ok2, mute = self._sys(["pactl", "get-sink-mute", "@DEFAULT_SINK@"])
+        if not ok:
+            return "[dim]◈ pactl ausente, senhor. pacman -S libpulse resolve.[/]"
+        pct = re.search(r"(\d+)%", out)
+        estado = "mudo" if ok2 and "yes" in mute else (f"{pct.group(1)}%" if pct else "?")
+        return f"[#00D4FF]◈ Volume: {escape(estado)}, senhor.[/]"
+
+    def _sys_brilho(self, arg: str) -> str:
+        """Brilho via brightnessctl: mostra, define N% ou ajusta +N/-N."""
+        a = arg.strip().lower()
+        if a:
+            m = re.fullmatch(r"([+-]?)(\d{1,3})", a)
+            if not m:
+                return "[dim]◈ Use /brilho 70, /brilho +10 ou /brilho -10, senhor.[/]"
+            sinal, num = m.group(1), m.group(2)
+            alvo = f"{num}%+" if sinal == "+" else (f"{num}%-" if sinal == "-" else f"{num}%")
+            ok, _ = self._sys(["brightnessctl", "s", alvo])
+            if not ok:
+                return "[dim]◈ brightnessctl ausente, senhor. pacman -S brightnessctl resolve.[/]"
+        ok, cur = self._sys(["brightnessctl", "g"])
+        ok2, mx = self._sys(["brightnessctl", "m"])
+        if not (ok and ok2):
+            return "[dim]◈ brightnessctl ausente, senhor. pacman -S brightnessctl resolve.[/]"
+        try:
+            pct = int(cur) * 100 // int(mx)
+        except (ValueError, ZeroDivisionError):
+            pct = "?"
+        return f"[#00D4FF]◈ Brilho em {pct}%, senhor.[/]"
+
+    def _sys_foto(self, arg: str) -> str:
+        """Captura a tela via grim (área com slurp). Guarda em ~/Imagens."""
+        dest = Path.home() / "Imagens"
+        try:
+            dest.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            return "[dim]◈ Não consegui abrir ~/Imagens, senhor.[/]"
+        arq = dest / f"jarvis-{datetime.now():%Y%m%d-%H%M%S}.png"
+        if arg.strip().lower() in ("area", "regiao", "região", "sel", "recorte"):
+            ok, geo = self._sys(["slurp"])
+            if not ok or not geo:
+                return "[dim]◈ Seleção cancelada — ou slurp ausente (pacman -S slurp).[/]"
+            ok, err = self._sys(["grim", "-g", geo, str(arq)])
+        else:
+            ok, err = self._sys(["grim", str(arq)])
+        if not ok:
+            if err:
+                return f"[dim]◈ A captura falhou, senhor: {escape(err[:120])}[/]"
+            return "[dim]◈ grim ausente, senhor. pacman -S grim resolve.[/]"
+        return f"[#00D4FF]◈ Captura guardada em {escape(str(arq))}, senhor.[/]"
 
     def action_search_chat(self) -> None:
         self.push_screen(SearchScreen(), self._do_search)

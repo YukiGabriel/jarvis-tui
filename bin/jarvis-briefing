@@ -11,7 +11,7 @@ COMUM="$(dirname "$0")/.jarvis-comum"
 
 prompt_do_modo() {
   case "$1" in
-    manha) printf '%s' "Jarvis, bom dia. Me de o briefing completo da manha sem eu precisar digitar nada.";;
+    manha) printf '%s' "Jarvis, bom dia. Me de o briefing completo da manha, com meus compromissos de hoje, sem eu precisar digitar nada.";;
     correria) printf '%s' "Jarvis, modo correria. Resumo de 1 linha, sem eu precisar digitar nada.";;
     noite) printf '%s' "Jarvis, boa noite. Receba-me com o resumo do dia.";;
     fds) printf '%s' "Jarvis, briefing de fim de semana, sem eu precisar digitar nada.";;
