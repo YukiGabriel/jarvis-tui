@@ -18,6 +18,41 @@ CONFIG = Path.home() / ".config/opencode/opencode.json"
 SHARE = Path.home() / ".local/share/jarvis-tui"
 SESSION_FILE = SHARE / "session_id"
 DEBUG_LOG = SHARE / "debug.log"
+HIST_FILE = SHARE / "chat.jsonl"
+HIST_MAX = 200   # linhas guardadas em disco
+HIST_SHOW = 30   # mensagens restauradas ao abrir
+
+
+def hist_append(who: str, text: str) -> None:
+    """Guarda uma mensagem no diário; apara o rabo para não crescer sem fim."""
+    try:
+        SHARE.mkdir(parents=True, exist_ok=True)
+        with open(HIST_FILE, "a") as f:
+            f.write(json.dumps({"ts": datetime.now().strftime("%H:%M"),
+                                "who": who, "text": text},
+                               ensure_ascii=False) + "\n")
+        with open(HIST_FILE) as f:
+            lines = f.readlines()
+        if len(lines) > HIST_MAX:
+            with open(HIST_FILE, "w") as f:
+                f.writelines(lines[-HIST_MAX:])
+    except Exception:
+        pass
+
+
+def hist_load() -> list[dict]:
+    """Últimas mensagens do diário (para restaurar a tela)."""
+    try:
+        out = []
+        with open(HIST_FILE) as f:
+            for line in f:
+                try:
+                    out.append(json.loads(line))
+                except Exception:
+                    continue
+        return out[-HIST_SHOW:]
+    except OSError:
+        return []
 
 
 def dbg(msg: str) -> None:
@@ -313,12 +348,31 @@ class Splash(Screen):
         self.dismiss_all()
 
 
+class SearchScreen(Screen):
+    """Mini-prompt de busca no chat (ctrl+f). Enter busca, Esc fecha."""
+
+    BINDINGS = [("escape", "cancel", "Fechar")]
+
+    def compose(self) -> ComposeResult:
+        yield Input(placeholder="Buscar no chat…", id="q")
+
+    def on_mount(self) -> None:
+        self.query_one("#q", Input).focus()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        self.dismiss(event.value.strip())
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
 class JarvisApp(App):
     CSS = JARVIS_CSS
     TITLE = "J.A.R.V.I.S."
     BINDINGS = [
         ("ctrl+q", "quit", "Sair"),
         ("ctrl+l", "clear_chat", "Limpar"),
+        ("ctrl+f", "search_chat", "Buscar"),
         (MIC_KEY, "toggle_mic", "🎙 Microfone"),
         (SPK_KEY, "toggle_voz", "🔊 Voz"),
         (OUV_KEY, "toggle_ouvido", "👂 Ouvido"),
@@ -351,6 +405,7 @@ class JarvisApp(App):
         self._mic_timer = None
         self._spin = 0
         self._sent_init = False
+        self._msgs: list[tuple[str, str, str]] = []  # (hora, autor, texto) p/ busca
 
     def compose(self) -> ComposeResult:
         yield Static(f"  ◈ J.A.R.V.I.S.  │  [dim]uplink: opencode/agent jarvis[/]  │  [dim]{MIC_KEY} 🎙 · {SPK_KEY} 🔊 · {OUV_KEY} 👂[/]", id="hud")
@@ -362,7 +417,7 @@ class JarvisApp(App):
                 yield Static("", id="core", classes="panel")
                 yield Static("", id="mcps", classes="panel")
                 yield Static("", id="sess", classes="panel")
-        yield Static(f"SENHOR ❯ digite, dite 🎙 ou diga hey jarvis 👂 · pare com 'pode parar'", id="promptbar")
+        yield Static(f"SENHOR ❯ digite, /ajuda, dite 🎙 ou diga hey jarvis 👂 · pare com 'pode parar'", id="promptbar")
         with Horizontal(id="inputrow"):
             yield Input(placeholder="Diga ao Jarvis…", id="prompt")
             yield Button("🎙 Falar", id="mic")
@@ -375,6 +430,15 @@ class JarvisApp(App):
         self._stream_start()
         chat = self.query_one("#chat", RichLog)
         sid = (self.session_id or "nova")[:13]
+        for m in hist_load():
+            ts, who, txt = m.get("ts", "--:--"), m.get("who", "?"), m.get("text", "")
+            self._msgs.append((ts, who, txt))
+            if who == "senhor":
+                self._render_user(chat, ts, txt)
+            else:
+                self._render_jarvis(chat, ts, txt)
+        if self._msgs:
+            chat.write("[dim]─ histórico restaurado ─[/]")
         chat.write("[#1E4A7A]────────────────────────────────────────────[/]")
         chat.write(f"[bold #00D4FF]◈ Jarvis online.[/] Sessão [dim]{sid}[/] — MCPs ao lado, senhor.")
         if not self.voz:
@@ -461,6 +525,78 @@ class JarvisApp(App):
             self.query_one("#chat", RichLog).clear()
         except Exception:
             pass
+
+    @staticmethod
+    def _render_user(chat: RichLog, ts: str, text: str) -> None:
+        chat.write(f"\n[dim]{ts}[/] [bold #FFB300]◈ SENHOR[/]\n  {escape(text)}")
+
+    @staticmethod
+    def _render_jarvis(chat: RichLog, ts: str, reply: str) -> None:
+        chat.write(f"\n[dim]{ts}[/] [bold #00D4FF]◈ JARVIS[/]")
+        if reply:
+            chat.write(Markdown(reply))
+        else:
+            chat.write("[dim](sem resposta)[/]")
+
+    def handle_slash(self, text: str) -> None:
+        """Comandos locais /ajuda /voz /ouvido /limpar /nova /briefing /mcp /buscar /sair."""
+        chat = self.query_one("#chat", RichLog)
+        parts = text[1:].split(None, 1)
+        cmd, arg = parts[0].lower(), (parts[1] if len(parts) > 1 else "")
+        if cmd in ("ajuda", "help", "comandos"):
+            chat.write("[#00D4FF]◈ Comandos[/]\n"
+                       "  [bold]/briefing[/] resumo do dia\n"
+                       "  [bold]/voz[/] liga/desliga a fala · [bold]/ouvido[/] liga/desliga o hey jarvis\n"
+                       "  [bold]/nova[/] nova conversa · [bold]/limpar[/] limpa a tela\n"
+                       "  [bold]/buscar TERMO[/] procura no chat · [bold]/mcp[/] estado dos sistemas\n"
+                       "  [bold]/sair[/] fecha a TUI")
+        elif cmd == "voz":
+            self.action_toggle_voz()
+        elif cmd == "ouvido":
+            self.action_toggle_ouvido()
+        elif cmd in ("limpar", "clear"):
+            self.action_clear_chat()
+        elif cmd in ("nova", "novo", "new"):
+            self.session_id = None
+            try:
+                SESSION_FILE.unlink(missing_ok=True)
+            except OSError:
+                pass
+            self.action_clear_chat()
+            chat.write("[dim]◈ Nova conversa, senhor. O passado ficou no arquivo.[/]")
+        elif cmd == "briefing":
+            self.send_to_jarvis("me dê o briefing do dia")
+        elif cmd == "mcp":
+            self.refresh_panels()
+            chat.write("[dim]◈ Painel de sistemas atualizado ao lado, senhor.[/]")
+        elif cmd in ("buscar", "busca", "search", "find"):
+            if arg:
+                self._do_search(arg)
+            else:
+                self.action_search_chat()
+        elif cmd in ("sair", "quit", "exit"):
+            self.exit()
+        else:
+            chat.write(f"[dim]◈ Comando desconhecido: {escape(cmd)}. Tente /ajuda, senhor.[/]")
+
+    def action_search_chat(self) -> None:
+        self.push_screen(SearchScreen(), self._do_search)
+
+    def _do_search(self, term: str | None) -> None:
+        if not term:
+            return
+        chat = self.query_one("#chat", RichLog)
+        t = term.lower()
+        hits = [(ts, who, txt) for ts, who, txt in self._msgs if t in txt.lower()]
+        if not hits:
+            chat.write(f"[dim]◈ Nada para '{escape(term)}', senhor.[/]")
+            return
+        lines = [f"[#00D4FF]◈ {len(hits)} ocorrência(s) de '{escape(term)}'[/]"]
+        for ts, who, txt in hits[-10:]:
+            tag = "SENHOR" if who == "senhor" else "JARVIS"
+            trecho = txt.replace("\n", " ⏎ ")
+            lines.append(f"  [dim]{ts}[/] [bold]{tag}[/] {escape(trecho[:140])}")
+        chat.write("\n".join(lines))
 
     def action_toggle_mic(self) -> None:
         self._mic_pressed()
@@ -859,8 +995,12 @@ class JarvisApp(App):
     async def on_input_submitted(self, event: Input.Submitted) -> None:
         text = event.value.strip()
         event.input.value = ""
-        if text:
-            self.send_to_jarvis(text)
+        if not text:
+            return
+        if text.startswith("/"):
+            self.handle_slash(text)
+            return
+        self.send_to_jarvis(text)
 
     @work(exclusive=True)
     async def send_to_jarvis(self, text: str) -> None:
@@ -869,16 +1009,16 @@ class JarvisApp(App):
         self.busy = True
         chat = self.query_one("#chat", RichLog)
         ts = datetime.now().strftime("%H:%M")
-        chat.write(f"\n[dim]{ts}[/] [bold #FFB300]◈ SENHOR[/]\n  {escape(text)}")
+        self._render_user(chat, ts, text)
+        self._msgs.append((ts, "senhor", text))
+        hist_append("senhor", text)
         chat.write(f"[dim]{SPIN[0]} Jarvis consulta o oráculo…[/]")
         try:
             reply, tools = await asyncio.to_thread(self._run_opencode, text)
             ts2 = datetime.now().strftime("%H:%M")
-            chat.write(f"\n[dim]{ts2}[/] [bold #00D4FF]◈ JARVIS[/]")
-            if reply:
-                chat.write(Markdown(reply))
-            else:
-                chat.write("[dim](sem resposta)[/]")
+            self._render_jarvis(chat, ts2, reply)
+            self._msgs.append((ts2, "jarvis", reply or ""))
+            hist_append("jarvis", reply or "")
             for t in tools[:6]:
                 chat.write(f"    [dim]⚙ {t}[/]")
             chat.write("[#1E4A7A]────────────────────────────────────────────[/]")
