@@ -1,0 +1,128 @@
+#!/bin/sh
+# Jarvis-sentinela — vigia a saúde do PC e avisa com voz, senhor.
+# Vigia: CPU pisada, RAM esgotada, disco cheio, temperatura alta, bateria fraca.
+# Uso: jarvis-sentinela [--teste] [--quieto] [--falar]
+#   --teste: limiares baixos para demonstrar a voz agora
+#   --quieto: só notify-send, sem voz · --falar: força a voz
+# Env: JARVIS_CPU=85 JARVIS_MEM=90 JARVIS_DISK=90 JARVIS_TEMP=80
+#      JARVIS_BAT=20 JARVIS_COOLDOWN=30 (min por alerta) JARVIS_NOTIF_VOZ=1
+# Automático: rode a cada 5 min (systemd --user timer ou cron).
+set -u
+COMUM="$(dirname "$0")/.jarvis-comum"
+[ -r "$COMUM" ] || COMUM="${JARVIS_BIN:-$HOME/.local/bin}/.jarvis-comum"
+# shellcheck source=./.jarvis-comum
+. "$COMUM"
+
+CPU_LIMIAR="${JARVIS_CPU:-85}"
+MEM_LIMIAR="${JARVIS_MEM:-90}"
+DISK_LIMIAR="${JARVIS_DISK:-90}"
+TEMP_LIMIAR="${JARVIS_TEMP:-80}"
+BAT_LIMIAR="${JARVIS_BAT:-20}"
+COOLDOWN="${JARVIS_COOLDOWN:-30}"
+MODO_VOZ="${JARVIS_NOTIF_VOZ:-1}"
+TESTE=0
+
+for a in "$@"; do
+  case "$a" in
+    --teste) TESTE=1;;
+    --quieto) MODO_VOZ=0;;
+    --falar) MODO_VOZ=1;;
+  esac
+done
+if [ "$TESTE" = "1" ]; then
+  CPU_LIMIAR=1; MEM_LIMIAR=1; DISK_LIMIAR=1; TEMP_LIMIAR=1; BAT_LIMIAR=101; COOLDOWN=0
+fi
+JARVIS_NOTIF_VOZ="$MODO_VOZ"; export JARVIS_NOTIF_VOZ
+
+avisa() { # $1 = nome, $2 = texto — voz + notify, com cooldown
+  nome="$1"; texto="$2"
+  jarvis_pode_alertar "$nome" "$COOLDOWN" || return 0
+  jarvis_marca_alerta "$nome"
+  jarvis_falar_fundo "$texto"
+  notify-send -u critical -t 15000 "Jarvis — sentinela" "$texto" 2>/dev/null || true
+  echo "sentinela [$nome]: $texto"
+}
+
+cpu_uso() { # % médio em 1s via /proc/stat
+  a=$(awk '/^cpu /{print $2,$3,$4,$5,$6,$7,$8}' /proc/stat)
+  sleep 1
+  b=$(awk '/^cpu /{print $2,$3,$4,$5,$6,$7,$8}' /proc/stat)
+  set -- $a; au=$1; an=$2; as=$3; ai=$4; aw=$5; aq=$6; ax=$7
+  set -- $b; bu=$1; bn=$2; bs=$3; bi=$4; bw=$5; bq=$6; bx=$7
+  awk "BEGIN{t1=$au+$an+$as+$ai+$aw+$aq+$ax; i1=$ai+$aw; t2=$bu+$bn+$bs+$bi+$bw+$bq+$bx; i2=$bi+$bw; dt=t2-t1; di=i2-i1; printf \"%d\", (dt>0 ? (dt-di)*100/dt : 0)}"
+}
+
+mem_uso() { # % usada (desconta disponível)
+  awk '/MemTotal:/{t=$2} /MemAvailable:/{a=$2} END{if(t>0) printf "%d", (t-a)*100/t; else print 0}' /proc/meminfo
+}
+
+disco_uso() { # $1 = caminho → %
+  df -P "$1" 2>/dev/null | awk 'NR==2{gsub(/%/,"",$5); print $5+0}'
+}
+
+temp_max() { # °C máxima encontrada, 0 se sem sensor (ignora zonas absurdas)
+  max=0
+  for z in /sys/class/thermal/thermal_zone*/temp; do
+    [ -r "$z" ] || continue
+    v=$(cat "$z" 2>/dev/null || echo 0)
+    case "$v" in ''|*[!0-9]*) continue;; esac
+    # algumas zonas expõem valores crus irreais — só vale 0..150°C
+    if [ "$v" -gt 150000 ] || [ "$v" -lt 0 ]; then continue; fi
+    c=$((v / 1000))
+    [ "$c" -gt "$max" ] && max="$c"
+  done
+  if command -v sensors >/dev/null 2>&1; then
+    s=$(sensors 2>/dev/null | grep -Eo '\+[0-9]+\.[0-9]+°C' | tr -d '+°C' | cut -d. -f1 | sort -n | tail -n 1)
+    case "$s" in ''|*[!0-9]*) ;; *) [ "$s" -gt 0 ] && [ "$s" -le 150 ] && [ "$s" -gt "$max" ] && max="$s";; esac
+  fi
+  echo "$max"
+}
+
+# ── CPU ──
+CPU=$(cpu_uso)
+if [ "$CPU" -ge "$CPU_LIMIAR" ]; then
+  TOPO=$(ps -eo pcpu,comm --sort=-pcpu 2>/dev/null | awk 'NR==2{printf "%s (%s%%)", $2, $1}')
+  avisa "cpu" "Senhor, a CPU está sendo pisada: ${CPU}% — maior vilão: ${TOPO:-desconhecido}."
+fi
+
+# ── RAM ──
+MEM=$(mem_uso)
+if [ "$MEM" -ge "$MEM_LIMIAR" ]; then
+  TOPO=$(ps -eo pmem,comm --sort=-pmem 2>/dev/null | awk 'NR==2{printf "%s (%s%%)", $2, $1}')
+  avisa "mem" "Senhor, a memória está no limite: ${MEM}% em uso — maior consumo: ${TOPO:-desconhecido}."
+fi
+
+# ── Disco (raiz + HOME, sem repetir o mesmo dispositivo) ──
+vistos=""
+for ponto in "/" "$HOME"; do
+  U=$(disco_uso "$ponto")
+  case "$U" in ''|*[!0-9]*) continue;; esac
+  dev=$(df -P "$ponto" 2>/dev/null | awk 'NR==2{print $1}')
+  case " $vistos " in *" $dev "*) continue;; esac
+  vistos="$vistos $dev"
+  if [ "$U" -ge "$DISK_LIMIAR" ]; then
+    nome="disco-$(echo "$ponto" | tr '/' '_' | sed 's/^_$/raiz/')"
+    avisa "$nome" "Senhor, o armazenamento está cheio: ${U}% em ${ponto}."
+  fi
+done
+
+# ── Temperatura ──
+TEMP=$(temp_max)
+if [ "$TEMP" -ge "$TEMP_LIMIAR" ] && [ "$TEMP" -gt 0 ]; then
+  avisa "temp" "Senhor, o PC está febril: ${TEMP} graus. Sugiro aliviar a carga."
+fi
+
+# ── Bateria (se houver) ──
+if command -v upower >/dev/null 2>&1; then
+  bat=$(upower -e 2>/dev/null | grep -i battery | head -n 1)
+  if [ -n "$bat" ]; then
+    pct=$(upower -i "$bat" 2>/dev/null | awk -F'[:%]' '/percentage/{gsub(/ /,"",$2); print $2+0}')
+    estado=$(upower -i "$bat" 2>/dev/null | awk -F': ' '/state/{print $2}' | tr -d ' ')
+    case "$pct" in ''|*[!0-9]*) pct=100;; esac
+    if [ "$pct" -le "$BAT_LIMIAR" ] && [ "$estado" = "discharging" ]; then
+      avisa "bateria" "Senhor, a bateria está fraca: ${pct}%. Ligar o carregador seria prudente."
+    fi
+  fi
+fi
+
+exit 0

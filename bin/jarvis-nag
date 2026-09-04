@@ -1,27 +1,13 @@
 #!/bin/sh
 # Jarvis — cutuca a cada 2 min se a TUI do Jarvis não estiver aberta.
 if pgrep -f "[j]arvis-tui" >/dev/null 2>&1; then exit 0; fi
-BIN="${JARVIS_BIN:-$HOME/.local/bin}"
-TUI="${JARVIS_TUI:-$BIN/jarvis-tui}"
-FALAR="${JARVIS_FALAR:-$BIN/jarvis-falar}"
-# Apps pessoais abertos junto (ex.: Brave + IDE). Opt-in: JARVIS_APPS=1.
-APPS="${JARVIS_APPS:-0}"
+COMUM="$(dirname "$0")/.jarvis-comum"
+[ -r "$COMUM" ] || COMUM="${JARVIS_BIN:-$HOME/.local/bin}/.jarvis-comum"
+# shellcheck source=./.jarvis-comum
+. "$COMUM"
 
-abrir_chat() {
-  PROMPT="Jarvis, me receba com o briefing sem eu precisar digitar nada."
-  # setsid descola do cgroup do systemd — sem isso o kitty morre junto com o serviço oneshot.
-  # TUI própria do Jarvis (com splash + prompt automático, sem digitar).
-  setsid -f kitty -T Jarvis fish -c "\"$TUI\" --prompt \"$PROMPT\"; exec fish" >/dev/null 2>&1 < /dev/null &
-  if [ "$APPS" = "1" ]; then
-    pgrep -f "[b]rave" >/dev/null 2>&1 || setsid -f brave >/dev/null 2>&1 < /dev/null &
-    pgrep -f "[i]dea" >/dev/null 2>&1 || setsid -f idea >/dev/null 2>&1 < /dev/null &
-  fi
-}
-
-if [ "${JARVIS_NOTIF_VOZ:-1}" != "0" ]; then
-  setsid -f sh -c "sleep 1; \"$FALAR\" 'Senhor ainda não abriu o Jarvis. Toque para conversar.'" >/dev/null 2>&1 < /dev/null &
-fi
+jarvis_falar_fundo 'Senhor ainda não abriu o Jarvis. Toque para conversar.'
 acao=$(notify-send -A iniciar="Iniciar Sistema" -t 60000 "Jarvis" "Senhor ainda não abriu o Jarvis. Toque para conversar." 2>/dev/null); rc=$?
 if [ $rc -eq 0 ] && [ "$acao" = "iniciar" ]; then
-  abrir_chat
+  jarvis_abrir_chat "Jarvis, me receba com o briefing sem eu precisar digitar nada."
 fi

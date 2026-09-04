@@ -12,6 +12,12 @@ for f in "$AQUI"/bin/*; do
   ln -sf "$f" "$DEST/$nome"
   echo "link: $DEST/$nome"
 done
+# biblioteca comum (dotfile: o glob acima não pega, link explícito)
+if [ -f "$AQUI/bin/.jarvis-comum" ]; then
+  chmod +x "$AQUI/bin/.jarvis-comum"
+  ln -sf "$AQUI/bin/.jarvis-comum" "$DEST/.jarvis-comum"
+  echo "link: $DEST/.jarvis-comum"
+fi
 
 if [ "${1:-}" != "--no-agent" ]; then
   AG="$HOME/.config/opencode/agent"

@@ -1,0 +1,50 @@
+#!/bin/sh
+# Jarvis — biblioteca comum dos auxiliares. NÃO execute; só faça `source`.
+# Centraliza o que vivia copiado entre briefing/nag/sentinela:
+# caminhos, voz em 2º plano, abertura do chat e cooldown por arquivo.
+# Uso (topo do script):
+#   COMUM="$(dirname "$0")/.jarvis-comum"
+#   [ -r "$COMUM" ] || COMUM="${JARVIS_BIN:-$HOME/.local/bin}/.jarvis-comum"
+#   . "$COMUM"
+case "$0" in
+  *.jarvis-comum) echo "jarvis-comum: biblioteca, não execute direto" >&2; exit 1;;
+esac
+
+JARVIS_BIN="${JARVIS_BIN:-$HOME/.local/bin}"
+JARVIS_FALAR="${JARVIS_FALAR:-$JARVIS_BIN/jarvis-falar}"
+JARVIS_TUI="${JARVIS_TUI:-$JARVIS_BIN/jarvis-tui}"
+JARVIS_SHARE="${JARVIS_SHARE:-$HOME/.local/share/jarvis-tui}"
+
+jarvis_falar_fundo() {
+  # $1 = texto — fala em 2º plano, sem travar quem chamou.
+  # JARVIS_NOTIF_VOZ=0 emudece. Texto vai por argv (sem furar aspas).
+  [ "${JARVIS_NOTIF_VOZ:-1}" = "0" ] && return 0
+  [ -x "$JARVIS_FALAR" ] || return 0
+  setsid -f sh -c 'sleep 1; "$0" "$1"' "$JARVIS_FALAR" "$1" >/dev/null 2>&1 < /dev/null &
+}
+
+jarvis_abrir_chat() {
+  # $1 = prompt inicial — abre a TUI descolada do cgroup do systemd.
+  # setsid descola do cgroup — sem isso o kitty morre junto com o serviço oneshot.
+  setsid -f kitty -T Jarvis fish -c "\"$JARVIS_TUI\" --prompt \"$1\"; exec fish" >/dev/null 2>&1 < /dev/null &
+  # Apps pessoais junto (só abre se ainda não estiver rodando). Opt-in: JARVIS_APPS=1.
+  if [ "${JARVIS_APPS:-0}" = "1" ]; then
+    pgrep -f "[b]rave" >/dev/null 2>&1 || setsid -f brave >/dev/null 2>&1 < /dev/null &
+    pgrep -f "[i]dea" >/dev/null 2>&1 || setsid -f idea >/dev/null 2>&1 < /dev/null &
+  fi
+}
+
+jarvis_pode_alertar() {
+  # $1 = nome, $2 = cooldown em minutos — verdade se pode avisar agora.
+  f="$JARVIS_SHARE/sentinela/$1"
+  [ -f "$f" ] || return 0
+  agora=$(date +%s); antes=$(cat "$f" 2>/dev/null || echo 0)
+  case "$antes" in ''|*[!0-9]*) antes=0;; esac
+  [ $(( (agora - antes) / 60 )) -ge "${2:-30}" ]
+}
+
+jarvis_marca_alerta() {
+  # $1 = nome — registra "avisei agora" para o cooldown.
+  mkdir -p "$JARVIS_SHARE/sentinela"
+  date +%s > "$JARVIS_SHARE/sentinela/$1"
+}
