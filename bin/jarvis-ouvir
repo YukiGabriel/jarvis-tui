@@ -1,0 +1,16 @@
+#!/bin/sh
+# Jarvis — grava do microfone e transcreve. Uso: jarvis-ouvir [segundos] [--model small]
+# Exemplo: jarvis-ouvir 10   (grava 10s e mostra o texto)
+SECS="8"
+MODEL="${JARVIS_MODEL:-turbo}"
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --model) MODEL="$2"; shift 2;;
+    *) SECS="$1"; shift;;
+  esac
+done
+TMP="$(mktemp /tmp/jarvis-ouvir-XXXX.wav)"
+echo "A falar, senhor... gravando ${SECS}s" >&2
+arecord -q -d "$SECS" -f S16_LE -r 16000 -c 1 "$TMP" || exit 1
+JARVIS_MODEL="$MODEL" jarvis-transcrever "$TMP"
+rm -f "$TMP"

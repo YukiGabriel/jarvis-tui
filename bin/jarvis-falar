@@ -1,0 +1,90 @@
+#!/bin/sh
+# Jarvis — dá voz ao mordomo, em pt-BR neural e humanizada.
+# Motor padrão: Kokoro (voz masculina Alex). Alternativas: piper (razo|faber), espeak.
+# Uso: jarvis-falar "Pois não, senhor" | eco | jarvis-falar
+# Opções: --voz alex|santa|dora|razo|faber | --rapidez 1.0 | --pausa 0.5 (só piper)
+#         --wav saida.wav (salva em vez de falar) | --motor kokoro|piper|espeak
+#         --vel 170 --tom 45 (só espeak)
+# Env: JARVIS_VOZ, JARVIS_RAPIDEZ, JARVIS_PAUSA, JARVIS_MOTOR, JARVIS_VEL, JARVIS_TOM
+VOZDIR="$HOME/.local/share/jarvis-voice/vozes"
+BIN="${JARVIS_BIN:-$HOME/.local/bin}"
+VOZ="${JARVIS_VOZ:-alex}"
+RAPIDEZ="${JARVIS_RAPIDEZ:-1.0}"
+PAUSA="${JARVIS_PAUSA:-0.5}"
+MOTOR="${JARVIS_MOTOR:-kokoro}"
+VEL="${JARVIS_VEL:-170}"
+TOM="${JARVIS_TOM:-45}"
+WAV=""
+TEXTO=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --wav) WAV="$2"; shift 2;;
+    --voz) VOZ="$2"; shift 2;;
+    --rapidez) RAPIDEZ="$2"; shift 2;;
+    --pausa) PAUSA="$2"; shift 2;;
+    --motor) MOTOR="$2"; shift 2;;
+    --vel) VEL="$2"; shift 2;;
+    --tom) TOM="$2"; shift 2;;
+    *) TEXTO="$TEXTO $1"; shift;;
+  esac
+done
+[ -z "$TEXTO" ] && { [ ! -t 0 ] && TEXTO="$(cat)"; }
+[ -z "$TEXTO" ] && { echo "Uso: jarvis-falar \"texto\" [--voz alex|razo|faber] [--wav out.wav]" >&2; exit 1; }
+
+falar() { # $1 = wav
+  if command -v paplay >/dev/null 2>&1; then paplay "$1"
+  elif command -v pw-play >/dev/null 2>&1; then pw-play "$1"
+  else aplay -q "$1"; fi
+}
+
+if [ "$MOTOR" = "espeak" ]; then
+  if [ -n "$WAV" ]; then
+    espeak-ng -v pt-br -s "$VEL" -p "$TOM" -w "$WAV" "$TEXTO"
+  else
+    espeak-ng -v pt-br -s "$VEL" -p "$TOM" "$TEXTO"
+  fi
+  exit 0
+fi
+
+# A voz escolhe o motor neural: alex|santa|dora → kokoro; razo|faber → piper.
+case "$VOZ" in
+  alex|santa|dora) MOTOR="kokoro"; KV="pm_${VOZ#pm_}"; case "$VOZ" in alex) KV="pm_alex";; santa) KV="pm_santa";; dora) KV="pf_dora";; esac;;
+  razo|faber) MOTOR="piper";;
+  *) echo "Voz desconhecida: $VOZ (alex|santa|dora|razo|faber)" >&2; exit 1;;
+esac
+
+if [ "$MOTOR" = "kokoro" ]; then
+  # Servidor aquecido primeiro (~1s); subprocesso frio de reserva (~8s).
+  PORTA="${JARVIS_VOZD_PORTA:-8765}"
+  servir() { # $1 = destino
+    curl -s -m 40 -G "http://127.0.0.1:$PORTA/falar" \
+      --data-urlencode "texto=$TEXTO" --data-urlencode "voz=$KV" \
+      --data-urlencode "speed=$RAPIDEZ" -o "$1" && [ -s "$1" ]
+  }
+  if [ -n "$WAV" ]; then
+    servir "$WAV" || printf '%s' "$TEXTO" | "$BIN/jarvis-kokoro" "$KV" "$RAPIDEZ" "$WAV"
+  else
+    TMP="$(mktemp /tmp/jarvis-fala-XXXX.wav)"
+    if servir "$TMP"; then :; else
+      printf '%s' "$TEXTO" | "$BIN/jarvis-kokoro" "$KV" "$RAPIDEZ" "$TMP" || { rm -f "$TMP"; exit 1; }
+    fi
+    falar "$TMP"
+    rm -f "$TMP"
+  fi
+  exit 0
+fi
+
+case "$VOZ" in
+  razo) MODEL="$VOZDIR/pt-BR-razo-medium.onnx";;
+  faber) MODEL="$VOZDIR/pt-BR-faber-medium.onnx";;
+esac
+[ -f "$MODEL" ] || { echo "Modelo ausente: $MODEL" >&2; exit 1; }
+
+if [ -n "$WAV" ]; then
+  printf '%s' "$TEXTO" | uv tool run --from piper-tts piper -m "$MODEL" --length-scale "$RAPIDEZ" --sentence-silence "$PAUSA" -f "$WAV"
+else
+  TMP="$(mktemp /tmp/jarvis-fala-XXXX.wav)"
+  printf '%s' "$TEXTO" | uv tool run --from piper-tts piper -m "$MODEL" --length-scale "$RAPIDEZ" --sentence-silence "$PAUSA" -f "$TMP" || { rm -f "$TMP"; exit 1; }
+  falar "$TMP"
+  rm -f "$TMP"
+fi

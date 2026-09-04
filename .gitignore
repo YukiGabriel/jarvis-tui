@@ -1,0 +1,9 @@
+__pycache__/
+*.py[cod]
+.venv/
+*.wav
+*.mp3
+session_id
+debug.log
+*.key
+.env

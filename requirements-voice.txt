@@ -1,0 +1,8 @@
+# Voz 100% local (opcional — o chat funciona sem).
+numpy
+openwakeword
+faster-whisper
+soundfile
+# Kokoro-82M (TTS neural, opcional — exige GPU/CPU forte):
+# torch
+# kokoro>=0.9.4

@@ -1,0 +1,64 @@
+#!/bin/sh
+# Jarvis — gatilhos de briefing conforme a rotina do senhor. Silencioso (sem voz).
+# Modos: manha | correria | noite | fds. Sem argumento: decide pela hora do login.
+# Teste: JARVIS_TEST_DOW=3 JARVIS_TEST_HM=12:30 jarvis-briefing
+PEND="$HOME/.local/share/jarvis-voice/pending"
+mkdir -p "$PEND"
+BIN="${JARVIS_BIN:-$HOME/.local/bin}"
+TUI="${JARVIS_TUI:-$BIN/jarvis-tui}"
+FALAR="${JARVIS_FALAR:-$BIN/jarvis-falar}"
+# Apps pessoais abertos junto (ex.: Brave + IDE). Opt-in: JARVIS_APPS=1.
+APPS="${JARVIS_APPS:-0}"
+
+abrir_chat() {
+  mode="$1"
+  case "$mode" in
+    manha) PROMPT="Jarvis, bom dia. Me de o briefing completo da manha sem eu precisar digitar nada.";;
+    correria) PROMPT="Jarvis, modo correria. Resumo de 1 linha, sem eu precisar digitar nada.";;
+    noite) PROMPT="Jarvis, boa noite. Receba-me com o resumo do dia.";;
+    fds) PROMPT="Jarvis, briefing de fim de semana, sem eu precisar digitar nada.";;
+    *) PROMPT="Jarvis, me receba com o briefing sem eu precisar digitar nada.";;
+  esac
+  # setsid descola do cgroup do systemd — sem isso o kitty morre junto com o serviço oneshot.
+  # TUI própria do Jarvis (com splash + prompt automático, sem digitar).
+  setsid -f kitty -T Jarvis fish -c "\"$TUI\" --prompt \"$PROMPT\"; exec fish" >/dev/null 2>&1 < /dev/null &
+  # Apps pessoais junto (só abre se ainda não estiver rodando).
+  if [ "$APPS" = "1" ]; then
+    pgrep -f "[b]rave" >/dev/null 2>&1 || setsid -f brave >/dev/null 2>&1 < /dev/null &
+    pgrep -f "[i]dea" >/dev/null 2>&1 || setsid -f idea >/dev/null 2>&1 < /dev/null &
+  fi
+}
+
+notify() {
+  texto="$1"; modo="$2"
+  # Voz junto: fala em segundo plano, sem travar o botão. JARVIS_NOTIF_VOZ=0 emudece.
+  if [ "${JARVIS_NOTIF_VOZ:-1}" != "0" ]; then
+    setsid -f sh -c "sleep 1; \"$FALAR\" \"$texto\"" >/dev/null 2>&1 < /dev/null &
+  fi
+  acao=$(notify-send -A iniciar="Iniciar Sistema" -t 60000 "Jarvis" "$texto" 2>/dev/null); rc=$?
+  if [ $rc -eq 0 ] && [ "$acao" = "iniciar" ]; then
+    abrir_chat "$modo"
+  fi
+  # sem fallback com segunda notificação: dismiss/timeout (rc!=0) não é erro, é só o senhor ignorando.
+}
+pend() { printf '%s\n' "$(date -Is) $1" > "$PEND/$1"; }
+
+MODE="$1"
+if [ -z "$MODE" ]; then
+  DOW="${JARVIS_TEST_DOW:-$(date +%u)}"   # 1=seg .. 7=dom
+  HM="${JARVIS_TEST_HM:-$(date +%H:%M)}"  # zero-padded, comparação textual vale
+  if [ "$HM" \< "06:00" ]; then exit 0; fi              # madrugada: nada
+  if [ "$DOW" -ge 6 ]; then MODE="fds"
+  elif [ "$HM" \< "11:40" ]; then MODE="manha"
+  elif [ "$HM" \< "18:00" ]; then MODE="correria"
+  else MODE="noite"; fi
+fi
+
+case "$MODE" in
+  manha)   notify "Bom dia, senhor. Toque para receber o briefing no chat." "$MODE";;
+  correria) notify "Modo correria — toque para o resumo de 1 linha no chat." "$MODE";;
+  noite)   notify "Boa noite, senhor. Toque para o resumo do dia no chat." "$MODE";;
+  fds)     notify "Bom dia, senhor. Toque para o briefing de fim de semana no chat." "$MODE";;
+  *) echo "Modo inválido: $MODE (manha|correria|noite|fds)" >&2; exit 1;;
+esac
+pend "$MODE"

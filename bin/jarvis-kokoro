@@ -1,0 +1,19 @@
+#!/usr/bin/env python3
+"""Jarvis-kokoro — sintetiza com Kokoro-82M pt-BR. Uso: eco texto | jarvis-kokoro [voz] [speed] [saida.wav]"""
+import sys
+import torch
+import soundfile as sf
+from kokoro import KPipeline
+
+voz = sys.argv[1] if len(sys.argv) > 1 else "pm_alex"
+speed = float(sys.argv[2]) if len(sys.argv) > 2 else 1.0
+saida = sys.argv[3] if len(sys.argv) > 3 else "/tmp/jarvis-kokoro.wav"
+texto = sys.stdin.read().strip()
+if not texto:
+    sys.exit("sem texto")
+pipe = KPipeline(lang_code="p", repo_id="hexgrad/Kokoro-82M")
+audio = []
+for _, _, chunk in pipe(texto, voice=voz, speed=speed):
+    audio.append(chunk)
+sf.write(saida, torch.cat(audio, dim=0).numpy(), 24000)
+print(saida)

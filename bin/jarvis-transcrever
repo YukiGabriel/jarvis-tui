@@ -1,0 +1,47 @@
+#!/bin/sh
+# Jarvis — transcreve um arquivo de áudio para texto, 100% local.
+# Uso: jarvis-transcrever <arquivo> [--model base] [--lang pt]
+# Modelos: tiny (rápido, impreciso), turbo (padrão), small, medium. JARVIS_MODEL e JARVIS_LANG como padrão.
+VENV="$HOME/.local/share/jarvis-voice"
+MODEL="${JARVIS_MODEL:-turbo}"
+LANG="${JARVIS_LANG:-pt}"
+FILE=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --model) MODEL="$2"; shift 2;;
+    --lang) LANG="$2"; shift 2;;
+    *) FILE="$1"; shift;;
+  esac
+done
+[ -z "$FILE" ] && { echo "Uso: jarvis-transcrever <arquivo> [--model base] [--lang pt]" >&2; exit 1; }
+[ -f "$FILE" ] || { echo "Arquivo não encontrado: $FILE" >&2; exit 1; }
+TMP="$(mktemp /tmp/jarvis-voz-XXXX.wav)"
+HINT="${JARVIS_HINT:-Jarvis, senhor, agenda, briefing, transcrição, computador.}"
+ffmpeg -hide_banner -loglevel error -y -i "$FILE" -ar 16000 -ac 1 -af "highpass=f=100,lowpass=f=7500" "$TMP" || exit 1
+"$VENV/bin/python" - "$TMP" "$MODEL" "$LANG" "$HINT" <<'EOF'
+import sys, wave, struct
+from faster_whisper import WhisperModel
+wav, model_name, lang, hint = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+# Gate de silêncio: nem acorda o modelo se não há som útil.
+with wave.open(wav) as w:
+    raw = w.readframes(w.getnframes())
+s = struct.unpack('<' + 'h' * (len(raw) // 2), raw) if raw else [0]
+rms = (sum(x * x for x in s) / max(len(s), 1)) ** 0.5
+if rms < 800:
+    sys.exit(0)
+m = WhisperModel(model_name, device="cpu", compute_type="int8")
+segs, info = m.transcribe(
+    wav,
+    language=None if lang == "auto" else lang,
+    initial_prompt=hint,
+    vad_filter=True,
+    vad_parameters=dict(min_silence_duration_ms=500),
+    no_speech_threshold=0.6,
+    condition_on_previous_text=False,
+)
+for s in segs:
+    t = s.text.strip()
+    if t and s.no_speech_prob < 0.6:
+        print(t)
+EOF
+rm -f "$TMP"

@@ -1,0 +1,29 @@
+#!/usr/bin/env python3
+"""Jarvis-wake-calibra — mede quanto o modelo ouve o SEU 'hey jarvis'.
+
+Uso: jarvis-wake-calibra [segundos]
+  Fale "hey jarvis" durante a gravação; o topo dos scores diz tudo.
+  Score > 0.7 dispara na TUI. Se o seu pico fica abaixo, me mostre o número.
+"""
+from __future__ import annotations
+import subprocess, sys, wave
+import numpy as np
+
+SECS = sys.argv[1] if len(sys.argv) > 1 else "6"
+TMP = "/tmp/jarvis-calibra.wav"
+print(f"Diga HEY JARVIS nos próximos {SECS}s…", flush=True)
+subprocess.run(["/usr/bin/arecord", "-q", "-d", SECS, "-f", "S16_LE",
+                "-r", "16000", "-c", "1", TMP], check=True)
+from openwakeword.model import Model
+m = Model(wakeword_models=["hey_jarvis"], inference_framework="onnx")
+w = wave.open(TMP)
+import struct
+raw = w.readframes(w.getnframes())
+s = struct.unpack('<' + 'h' * (len(raw) // 2), raw)
+best, hist = 0.0, [0] * 10
+for i in range(0, len(s) - 1280, 1280):
+    sc = float(m.predict(np.array(s[i:i + 1280], dtype=np.int16)).get("hey_jarvis", 0.0))
+    best = max(best, sc)
+    hist[min(int(sc * 10), 9)] += 1
+print(f"PICO={best:.3f}  (limiar da TUI: 0.7)")
+print("distribuição: " + " ".join(f"{i / 10:.1f}+:{c}" for i, c in enumerate(hist)))

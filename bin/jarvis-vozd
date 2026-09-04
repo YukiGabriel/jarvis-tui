@@ -1,0 +1,111 @@
+#!/usr/bin/env python3
+"""Jarvis-vozd — Kokoro-82M aquecido em memória. Responde em ~1s, não ~8s.
+
+GET /vivo → ok
+GET /falar?texto=…&voz=pm_alex&speed=1.0 → audio/wav (24kHz mono)
+Frases fixas pré-geradas no boot. Porta via JARVIS_VOZD_PORTA (padrão 8765).
+Só localhost. Sem dependências além do venv kokoro + stdlib.
+"""
+from __future__ import annotations
+import io
+import os
+import threading
+import time
+import urllib.parse
+import wave
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+import torch
+from kokoro import KPipeline
+
+PORTA = int(os.environ.get("JARVIS_VOZD_PORTA", "8765"))
+VOZES = {"pm_alex", "pm_santa", "pf_dora"}
+FIXAS = [
+    "Pois não, senhor.",
+    "Às ordens.",
+    "Um momento, senhor.",
+    "Não entendi, senhor. Pode repetir?",
+]
+
+_pipe: KPipeline | None = None
+_cache: dict = {}
+_lock = threading.Lock()
+
+
+def sintetizar(texto: str, voz: str, speed: float) -> bytes:
+    global _pipe
+    if _pipe is None:
+        _pipe = KPipeline(lang_code="p", repo_id="hexgrad/Kokoro-82M")
+    chave = (texto, voz, speed)
+    with _lock:
+        if chave in _cache:
+            return _cache[chave]
+    audio = []
+    for _, _, chunk in _pipe(texto, voice=voz, speed=speed):
+        audio.append(chunk)
+    pcm = (torch.cat(audio, dim=0).numpy() * 32767).astype("<i2").tobytes()
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(24000)
+        w.writeframes(pcm)
+    dados = buf.getvalue()
+    with _lock:
+        if len(_cache) < 200:
+            _cache[chave] = dados
+    return dados
+
+
+class Mao(BaseHTTPRequestHandler):
+    server_version = "jarvis-vozd/1"
+
+    def log_message(self, *a):
+        pass
+
+    def _ok(self, tipo: str, corpo: bytes):
+        self.send_response(200)
+        self.send_header("Content-Type", tipo)
+        self.send_header("Content-Length", str(len(corpo)))
+        self.end_headers()
+        self.wfile.write(corpo)
+
+    def do_GET(self):
+        rota = urllib.parse.urlparse(self.path)
+        if rota.path == "/vivo":
+            return self._ok("text/plain", b"ok")
+        if rota.path == "/falar":
+            q = urllib.parse.parse_qs(rota.query)
+            texto = (q.get("texto", [""])[0] or "")[:1200]
+            voz = q.get("voz", ["pm_alex"])[0]
+            try:
+                speed = float(q.get("speed", ["1.0"])[0])
+            except ValueError:
+                speed = 1.0
+            if not texto:
+                self.send_error(400, "sem texto")
+                return
+            if voz not in VOZES:
+                voz = "pm_alex"
+            try:
+                return self._ok("audio/wav", sintetizar(texto, voz, speed))
+            except Exception as e:
+                self.send_error(500, str(e)[:200])
+                return
+        self.send_error(404)
+
+
+def main() -> None:
+    print("Aquecendo o Alex…", flush=True)
+    t0 = time.time()
+    for frase in FIXAS:
+        try:
+            sintetizar(frase, "pm_alex", 1.0)
+        except Exception as e:
+            print(f"falha no aquecimento: {e}", flush=True)
+    print(f"jarvis-vozd online na porta {PORTA} ({time.time() - t0:.0f}s de forja).", flush=True)
+    ThreadingHTTPServer(("127.0.0.1", PORTA), Mao).serve_forever()
+
+
+if __name__ == "__main__":
+    main()
