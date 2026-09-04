@@ -1,7 +1,6 @@
 <div align="center">
 
 ```
-     trimite o núcleo…
   ╭────────╮
 ╭┤ ◜  ◝ ├╮
 ││  ◉  ││
@@ -13,9 +12,9 @@
 
 **A interface do mordomo — chat, voz e ouvido, conectados ao agente Jarvis via [opencode](https://opencode.ai).**
 
-[![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-3776AB?style=flat-square)]()
-[![Textual](https://img.shields.io/badge/textual-TUI-00D4FF?style=flat-square)]()
-[![Voz local](https://img.shields.io/badge/voz-100%25_local-00FFC8?style=flat-square)]()
+![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-3776AB?style=flat-square)
+![Textual](https://img.shields.io/badge/textual-TUI-00D4FF?style=flat-square)
+![Voz local](https://img.shields.io/badge/voz-100%25_local-00FFC8?style=flat-square)
 
 </div>
 
@@ -36,7 +35,8 @@ Painel lateral mostra **núcleo**, **sistemas (MCPs)** com status real (`●` ok
 ### 📦 Instalação
 
 ```bash
-cd ~/Projects/jarvis-tui
+git clone https://github.com/YukiGabriel/jarvis-tui.git
+cd jarvis-tui
 ./install.sh            # links em ~/.local/bin + prompt do agente
 uv run --python 3.14 --with textual --with rich src/jarvis_tui.py
 # ou, com pyproject:
@@ -49,7 +49,7 @@ O chat funciona sem nada disso. Para microfone + respostas faladas, 100% local:
 
 ```bash
 uv pip install -r requirements-voice.txt
-sudo apt install alsa-utils ffmpeg          # arecord + conversão
+sudo pacman -S alsa-utils ffmpeg          # Arch (Debian/Ubuntu: apt install)
 uv tool run --from piper-tts piper ...      # vozes razo/faber (sob demanda)
 ```
 
